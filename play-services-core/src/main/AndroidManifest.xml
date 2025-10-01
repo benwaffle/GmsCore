@@ -164,6 +164,8 @@
 
     <uses-permission android:name="org.microg.gms.STATUS_BROADCAST" />
 
+    <uses-permission android:name="android.permission.READ_PRIVILEGED_PHONE_STATE" />
+
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -488,6 +490,16 @@
             <meta-data
                 android:name="android.accounts.AccountAuthenticator.customTokens"
                 android:value="1" />
+        </service>
+
+        <!-- Constellation -->
+
+        <service android:name="org.microg.gms.constellation.ConstellationService"
+                 android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.constellation.service.START" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </service>
 
         <activity
@@ -1194,7 +1206,6 @@
                 <action android:name="com.google.android.gms.common.download.START" />
                 <action android:name="com.google.android.gms.common.service.START" />
                 <action android:name="com.google.android.gms.config.START" />
-                <action android:name="com.google.android.gms.constellation.service.START" />
                 <action android:name="com.google.android.gms.deviceconnection.service.START" />
                 <action android:name="com.google.android.gms.enterprise.loader.service.START" />
                 <action android:name="com.google.android.gms.facs.internal.service.START" />

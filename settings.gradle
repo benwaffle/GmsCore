@@ -65,6 +65,8 @@ include ':play-services-vision-common'
 include ':play-services-wearable'
 include ':play-services-fitness'
 
+include ':play-services-constellation'
+
 include ':play-services-api'
 include ':play-services'
 

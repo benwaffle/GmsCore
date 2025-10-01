@@ -48,6 +48,7 @@ dependencies {
     implementation project(':play-services-threadnetwork-core')
     implementation project(':play-services-vision-core')
     implementation project(':play-services-wearable-core')
+    implementation project(':play-services-constellation')
 
     implementation project(':play-services-core-proto')
 
