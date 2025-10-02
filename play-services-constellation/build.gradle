@@ -31,9 +31,11 @@ android {
 
 apply from: '../gradle/publish-android.gradle'
 
-description = 'microG implementation of play-services-constellation (stub)'
+description = 'microG implementation of play-services-constellation'
 
 dependencies {
-    implementation project(':play-services-base-core')
+    api project(':play-services-base')
+    api project(':play-services-basement')
+    api project(':play-services-tasks')
 }
 

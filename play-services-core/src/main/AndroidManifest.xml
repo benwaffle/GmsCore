@@ -474,6 +474,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Constellation (Phone Number Verification) -->
+
+        <service android:name="org.microg.gms.constellation.ConstellationService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.constellation.service.START" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+
         <!-- Auth -->
 
         <service android:name="org.microg.gms.auth.loginservice.GoogleLoginService">
@@ -490,16 +501,6 @@
             <meta-data
                 android:name="android.accounts.AccountAuthenticator.customTokens"
                 android:value="1" />
-        </service>
-
-        <!-- Constellation -->
-
-        <service android:name="org.microg.gms.constellation.ConstellationService"
-                 android:exported="true">
-            <intent-filter>
-                <action android:name="com.google.android.gms.constellation.service.START" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
         </service>
 
         <activity
