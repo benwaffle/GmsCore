@@ -5,9 +5,11 @@
 
 package org.microg.gms.constellation
 
-import androidx.lifecycle.lifecycleScope
 import android.annotation.SuppressLint
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.NetworkInfo
 import android.os.Build
 import android.os.RemoteException
 import android.provider.Settings
@@ -44,23 +46,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okio.ByteString.Companion.toByteString
+import org.microg.gms.common.Constants
 import org.microg.gms.common.PackageUtils
 import org.microg.gms.droidguard.core.VersionUtil
 import org.microg.gms.gcm.GcmConstants
-import org.microg.gms.phonenumberverification.ChallengePreference
-import org.microg.gms.phonenumberverification.ChallengeResponse
 import org.microg.gms.phonenumberverification.ClientInfo
+import org.microg.gms.phonenumberverification.ConnectivityAvailability
+import org.microg.gms.phonenumberverification.ConnectivityInfo
+import org.microg.gms.phonenumberverification.ConnectivityState
+import org.microg.gms.phonenumberverification.ConnectivityType
 import org.microg.gms.phonenumberverification.CountryInfo
 import org.microg.gms.phonenumberverification.DeviceId
 import org.microg.gms.phonenumberverification.DeviceSignals
+import org.microg.gms.phonenumberverification.DeviceType
 import org.microg.gms.phonenumberverification.IMSIRequest
 import org.microg.gms.phonenumberverification.IdTokenRequest
-import org.microg.gms.phonenumberverification.MTChallengePreference
 import org.microg.gms.phonenumberverification.MobileOperatorInfo
 import org.microg.gms.phonenumberverification.Param
 import org.microg.gms.phonenumberverification.PhoneDeviceVerificationClient
 import org.microg.gms.phonenumberverification.PhoneNumberSource
-import org.microg.gms.phonenumberverification.ProceedRequest
 import org.microg.gms.phonenumberverification.RequestHeader
 import org.microg.gms.phonenumberverification.RequestTrigger
 import org.microg.gms.phonenumberverification.RoamingState
@@ -68,30 +72,41 @@ import org.microg.gms.phonenumberverification.SIMAssociation
 import org.microg.gms.phonenumberverification.SIMInfo
 import org.microg.gms.phonenumberverification.SIMSlot
 import org.microg.gms.phonenumberverification.SIMState
-import org.microg.gms.phonenumberverification.ServerChallengeResponse
 import org.microg.gms.phonenumberverification.ServiceState
 import org.microg.gms.phonenumberverification.StructuredAPIParams
 import org.microg.gms.phonenumberverification.SyncRequest
 import org.microg.gms.phonenumberverification.TelephonyInfo
 import org.microg.gms.phonenumberverification.TelephonyPhoneNumber
 import org.microg.gms.phonenumberverification.TriggerType
-import org.microg.gms.phonenumberverification.Ts43ChallengeResponse
 import org.microg.gms.phonenumberverification.Verification
 import org.microg.gms.phonenumberverification.VerificationAssociation
 import org.microg.gms.phonenumberverification.VerificationState
 import java.net.URL
 import java.security.KeyPairGenerator
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.spec.ECGenParameterSpec
 import java.util.Locale
 import java.util.UUID
-import kotlin.text.toString
 
-class ConstellationApiServiceImpl(private val context: Context) : IConstellationApiService.Stub() {
+private const val API_KEY = "AIzaSyAP-gfH3qvi6vgHZbSYwQ_XHqV_mXHhzIk" // TODO: dedup
+
+/*
+TODO:
+* what do we cache/store?
+* key management for ClientAuth - maybe not needed? it's not in the traces i captured
+ */
+
+@RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+class ConstellationApiServiceImpl(
+    private val context: Context,
+    private val getSpatulaHeader: suspend (String) -> String?
+) : IConstellationApiService.Stub() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val subscriptionManager = context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
     private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+    private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val versionUtil = VersionUtil(context)
 
     companion object {
@@ -162,6 +177,9 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
                 throw Exception("Unexpected verification state: ${syncResponse.responses[0].verification?.state}")
             }
 
+            callbacks.onPhoneNumberVerificationsCompleted(Status.CANCELED, VerifyPhoneNumberResponse(), apiMetadata)
+
+            /*
             // Step 2: Perform TS43 auth flow
             Log.d(TAG, "Starting TS43 authentication flow")
             val temporaryToken = performTs43AuthFlow()
@@ -186,6 +204,7 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
             }
 
             callbacks.onPhoneNumberVerificationsCompleted(Status.SUCCESS, response, apiMetadata)
+             */
         } catch (e: Exception) {
             Log.e(TAG, "Error in TS43 verification", e)
             callbacks.onPhoneNumberVerificationsCompleted(
@@ -196,9 +215,8 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
         }
     }
 
-    @SuppressLint("HardwareIds")
-    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    private fun createSyncRequest(sessionId: String): SyncRequest {
+    @SuppressLint("HardwareIds", "MissingPermission")
+    private suspend fun createSyncRequest(sessionId: String): SyncRequest {
         val subs = subscriptionManager.activeSubscriptionInfoList
 
         return SyncRequest.build {
@@ -217,18 +235,18 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
                             "one_time_verification" to "True",
                             "calling_api" to "verifyPhoneNumber",
                             "required_consumer_consent" to "RCS",
-//                                "sessionId" to "<uuid>" // TODO: generate a uuid?
+                            "sessionId" to sessionId, // TODO: this is a different session ID from the req header
                         ).map { (key, value) ->
                             Param.build {
                                 name = key
                                 value_ = value
                             }
                         }
-                        challenge_preference = ChallengePreference.build {
-                            mt_preference = MTChallengePreference.build {
+//                        challenge_preference = ChallengePreference.build {
+//                            mt_preference = MTChallengePreference.build {
 //                                localized_message_template("asdf") // can we ignore if not doing MT SMS challenge?
-                            }
-                        }
+//                            }
+//                        }
                         structured_api_params = StructuredAPIParams.build {
                             policy_id = UPI_CARRIER_TOS_TS43
                             id_token_request = IdTokenRequest.build {
@@ -256,8 +274,7 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
         }
     }
 
-    @SuppressLint("HardwareIds")
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @SuppressLint("HardwareIds", "MissingPermission")
     private fun createSimAssociation(sub: SubscriptionInfo, tm: TelephonyManager): SIMAssociation {
         val subId = sub.subscriptionId
 
@@ -291,7 +308,7 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    @SuppressLint("MissingPermission")
     private fun createTelephonyInfo(sub: SubscriptionInfo, tm: TelephonyManager): TelephonyInfo {
         return TelephonyInfo.build {
             sim_state = SIMState.SIM_NOT_READY // just based on what I saw from GMS
@@ -387,50 +404,55 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
         }
     }
 
-    private fun createProceedRequest(temporaryToken: String, sessionId: String): ProceedRequest {
-        val builder = ProceedRequest.Builder()
-
-        // Create verification in pending state
-        val verificationBuilder = Verification.Builder()
-        verificationBuilder.state(VerificationState.VERIFICATION_STATE_PENDING)
-
-        // Create TS43 challenge response with temporary token
-        val ts43ResponseBuilder = Ts43ChallengeResponse.Builder()
-
-        val serverResponseBuilder = ServerChallengeResponse.Builder()
-        serverResponseBuilder.temporary_token(temporaryToken)
-        ts43ResponseBuilder.server_challenge_response(serverResponseBuilder.build())
-
-        val challengeResponseBuilder = ChallengeResponse.Builder()
-        challengeResponseBuilder.ts43_challenge_response(ts43ResponseBuilder.build())
-
-        builder.verification(verificationBuilder.build())
-        builder.challenge_response(challengeResponseBuilder.build())
-        builder.header_(createRequestHeader(sessionId))
-
-        return builder.build()
-    }
-
-    @SuppressLint("HardwareIds")
-    private fun createRequestHeader(sessionId: String): RequestHeader {
+//    private fun createProceedRequest(temporaryToken: String, sessionId: String): ProceedRequest {
+//        val builder = ProceedRequest.Builder()
+//
+//        // Create verification in pending state
+//        val verificationBuilder = Verification.Builder()
+//        verificationBuilder.state(VerificationState.VERIFICATION_STATE_PENDING)
+//
+//        // Create TS43 challenge response with temporary token
+//        val ts43ResponseBuilder = Ts43ChallengeResponse.Builder()
+//
+//        val serverResponseBuilder = ServerChallengeResponse.Builder()
+//        serverResponseBuilder.temporary_token(temporaryToken)
+//        ts43ResponseBuilder.server_challenge_response(serverResponseBuilder.build())
+//
+//        val challengeResponseBuilder = ChallengeResponse.Builder()
+//        challengeResponseBuilder.ts43_challenge_response(ts43ResponseBuilder.build())
+//
+//        builder.verification(verificationBuilder.build())
+//        builder.challenge_response(challengeResponseBuilder.build())
+//        builder.header_(createRequestHeader(sessionId))
+//
+//        return builder.build()
+//    }
+//
+    @SuppressLint("HardwareIds", "MissingPermission")
+    private suspend fun createRequestHeader(sessionId: String): RequestHeader {
         val instanceId = InstanceID.getInstance(context)
-        val token = instanceId.getToken("496232013492", GcmConstants.INSTANCE_ID_SCOPE_GCM) // TODO: double check the authorizedEntity. Search "IidToken__asterism_project_number" in GmsCore
+        val iidToken = instanceId.getToken(
+            "496232013492",// TODO: double check the authorizedEntity. Search "IidToken__asterism_project_number" in GmsCore
+            GcmConstants.INSTANCE_ID_SCOPE_GCM
+        )
         // TODO cache/store?
         val keypair = genEcP256Keypair("gms-constellation-temp")
-        val data = hashMapOf(
-            "dg_androidId" to androidId.toString(16),
-            "dg_session" to sessionId.toString(16),
-            "dg_gmsCoreVersion" to com.google.android.gms.BuildConfig.VERSION_CODE.toString(),
-            "dg_sdkVersion" to org.microg.gms.profile.Build.VERSION.SDK_INT.toString()
-        )
-//        val droidGuardResult = DroidGuardClient.getResults(context, "devicekey", data).await()
-        lifecycleScope.launchWhenResumed {  }
-        val dg = withContext(Dispatchers.IO) { DroidGuardClient.getResults(context, "attest", data).await() }
+
+        val hasher = MessageDigest.getInstance("SHA-256")
+        hasher.update(iidToken.toByteArray())
+        val iidHash = Base64.encodeToString(hasher.digest(), Base64.NO_PADDING or Base64.NO_WRAP)
+
+        val droidguardResult = DroidGuardClient.getResults(
+            context, "constellation_verify", hashMapOf(
+                "iidHash" to iidHash,
+                "rpc" to "sync"
+            )
+        ).await()
 
         return RequestHeader.build {
             client_info = ClientInfo.build {
                 device_id = DeviceId.build {
-                    iid_token = token
+                    iid_token = iidToken
 
                     val id = Settings.Secure.getString(
                         context.contentResolver,
@@ -445,16 +467,45 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
                 gmscore_version = versionUtil.versionString
                 android_sdk_version = Build.VERSION.SDK_INT
                 device_signals = DeviceSignals.build {
-                    droidguard_token = "TODO"
+//                    droidguard_token = droidguardToken
+                    droidguard_result = droidguardResult
                 }
                 has_read_privileged_phone_state_permission = true
                 country_info = CountryInfo.build {
-                    sim_countries = listOf("TODO")
-                    network_countries = listOf("TODO")
+                    sim_countries = listOf(telephonyManager.simCountryIso)
+                    network_countries = listOf(telephonyManager.networkCountryIso)
                 }
-                connectivity_infos = listOf() // TODO
+                connectivity_infos = connectivityManager.allNetworks
+                    .mapNotNull { net ->
+                        val cap = connectivityManager.getNetworkCapabilities(net)
+                        if (cap == null) return@mapNotNull null
+                        val info = connectivityManager.getNetworkInfo(net)
+                        if (info == null) return@mapNotNull null
+                        ConnectivityInfo.build {
+                            type =
+                                if (cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
+                                    ConnectivityType.CONNECTIVITY_TYPE_WIFI
+                                else if (cap.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
+                                    ConnectivityType.CONNECTIVITY_TYPE_MOBILE
+                                else
+                                    ConnectivityType.CONNECTIVITY_TYPE_UNKNOWN
+                            state = when (info.state) {
+                                NetworkInfo.State.CONNECTING -> ConnectivityState.CONNECTIVITY_STATE_CONNECTING
+                                NetworkInfo.State.CONNECTED -> ConnectivityState.CONNECTIVITY_STATE_CONNECTED
+                                NetworkInfo.State.SUSPENDED -> ConnectivityState.CONNECTIVITY_STATE_SUSPENDED
+                                NetworkInfo.State.DISCONNECTING -> ConnectivityState.CONNECTIVITY_STATE_DISCONNECTING
+                                NetworkInfo.State.DISCONNECTED -> ConnectivityState.CONNECTIVITY_STATE_DISCONNECTED
+                                NetworkInfo.State.UNKNOWN -> ConnectivityState.CONNECTIVITY_STATE_UNKNOWN
+                            }
+                            availability = when (info.isAvailable) {
+                                true -> ConnectivityAvailability.CONNECTIVITY_AVAILABLE
+                                false -> ConnectivityAvailability.CONNECTIVITY_NOT_AVAILABLE
+                            }
+                        }
+                    }
                 model = Build.MODEL
                 manufacturer = Build.MANUFACTURER
+                device_type = DeviceType.DEVICE_TYPE_PHONE // is this always true?
                 device_fingerprint = Build.FINGERPRINT
             }
             session_id = sessionId
@@ -464,8 +515,27 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
         }
     }
 
-    private fun createGrpcClient(): PhoneDeviceVerificationClient {
+    private suspend fun createGrpcClient(): PhoneDeviceVerificationClient {
+         // Get spatula header for the calling package
+         val callingPackage = PackageUtils.getCallingPackage(context)
+             ?: throw IllegalStateException("No calling package in AIDL call")
+
+         val spatulaHeader = withContext(Dispatchers.IO) {
+             getSpatulaHeader(callingPackage)
+                 ?: throw IllegalStateException("Failed to generate spatula header for $callingPackage")
+         }
+
          val client = OkHttpClient.Builder()
+             .addInterceptor { chain ->
+                 val originalRequest = chain.request()
+                 val builder = originalRequest.newBuilder()
+                     .header("x-goog-api-key", API_KEY)
+                     .header("x-android-package", Constants.GMS_PACKAGE_NAME)
+                     .header("x-android-cert", Constants.GMS_PACKAGE_SIGNATURE_SHA1)
+                     .header("x-goog-spatula", spatulaHeader)
+
+                 chain.proceed(builder.build())
+             }
              .build()
 
          val grpcClient = GrpcClient.Builder()
@@ -476,7 +546,6 @@ class ConstellationApiServiceImpl(private val context: Context) : IConstellation
          return grpcClient.create(PhoneDeviceVerificationClient::class)
     }
 
-    @RequiresApi(Build.VERSION_CODES.M)
     private fun genEcP256Keypair(alias: String): java.security.KeyPair {
         val kpg = KeyPairGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore"

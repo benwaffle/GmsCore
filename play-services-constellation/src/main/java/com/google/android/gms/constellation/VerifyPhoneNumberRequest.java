@@ -14,6 +14,14 @@ public class VerifyPhoneNumberRequest extends AutoSafeParcelable {
     public long b;
     @Field(3)
     public IdTokenRequest c;
+
+    /**
+     * strings i've seen:
+     * consented: true/false
+     * is_pnv_consent: true
+     * api_version: integer (1, 2)
+     * policy_id: string
+     */
     @Field(4)
     public Bundle settings;
     @Field(5)
