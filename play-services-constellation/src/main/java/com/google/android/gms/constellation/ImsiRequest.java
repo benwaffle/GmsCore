@@ -4,14 +4,14 @@ import org.microg.safeparcel.AutoSafeParcelable;
 
 public class ImsiRequest extends AutoSafeParcelable {
     @Field(1)
-    String imsi;
+    public String imsi;
     @Field(2)
-    String msisdn;
+    public String msisdn;
 
     @Override
     public String toString() {
         return "ImsiRequest{" +
-                "a='" + imsi + '\'' +
+                "imsi='" + imsi + '\'' +
                 ", msisdn='" + msisdn + '\'' +
                 '}';
     }

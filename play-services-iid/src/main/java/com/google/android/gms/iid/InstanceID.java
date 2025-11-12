@@ -39,7 +39,7 @@ import java.util.Map;
 import static org.microg.gms.gcm.GcmConstants.EXTRA_DELETE;
 import static org.microg.gms.gcm.GcmConstants.EXTRA_SCOPE;
 import static org.microg.gms.gcm.GcmConstants.EXTRA_SENDER;
-import static org.microg.gms.gcm.GcmConstants.EXTRA_SUBSCIPTION;
+import static org.microg.gms.gcm.GcmConstants.EXTRA_SUBSCRIPTION;
 import static org.microg.gms.gcm.GcmConstants.EXTRA_SUBTYPE;
 
 /**
@@ -137,7 +137,7 @@ public class InstanceID {
 
         if (extras == null) extras = new Bundle();
         extras.putString(EXTRA_SENDER, authorizedEntity);
-        extras.putString(EXTRA_SUBSCIPTION, authorizedEntity);
+        extras.putString(EXTRA_SUBSCRIPTION, authorizedEntity);
         extras.putString(EXTRA_DELETE, "1");
         extras.putString("X-" + EXTRA_DELETE, "1");
         extras.putString(EXTRA_SUBTYPE, TextUtils.isEmpty(subtype) ? authorizedEntity : subtype);
@@ -246,8 +246,16 @@ public class InstanceID {
     }
 
     @PublicApi(exclude = true)
-    public String requestToken(String authorizedEntity, String scope, Bundle extras) {
-        throw new UnsupportedOperationException();
+    public String requestToken(String authorizedEntity, String scope, Bundle extras) throws IOException {
+        if (extras == null) extras = new Bundle();
+        extras.putString(EXTRA_SENDER, authorizedEntity);
+        extras.putString(EXTRA_SUBSCRIPTION, authorizedEntity);
+        extras.putString("X-" + EXTRA_SUBSCRIPTION, authorizedEntity);
+        extras.putString(EXTRA_SUBTYPE, TextUtils.isEmpty(subtype) ? authorizedEntity : subtype);
+        extras.putString("X-" + EXTRA_SUBTYPE, TextUtils.isEmpty(subtype) ? authorizedEntity : subtype);
+        if (scope != null) extras.putString(EXTRA_SCOPE, scope);
+
+        return rpc.handleRegisterMessageResult(rpc.sendRegisterMessageBlocking(extras, getKeyPair()));
     }
 
     private synchronized KeyPair getKeyPair() {

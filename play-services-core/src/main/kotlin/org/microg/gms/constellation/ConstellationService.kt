@@ -34,12 +34,14 @@ import org.microg.gms.common.GmsService
  */
 class ConstellationService : BaseService("GmsConstellationSvc", GmsService.CONSTELLATION) {
 
-    private val appCert = AppCertManager(this)
+    private val appCert by lazy { AppCertManager(this) }
 
-    private val api = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-        ConstellationApiServiceImpl(this, appCert::getSpatulaHeader)
-    } else {
-        TODO("VERSION.SDK_INT < VANILLA_ICE_CREAM")
+    private val api by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            ConstellationApiServiceImpl(this, appCert::getSpatulaHeader)
+        } else {
+            TODO("VERSION.SDK_INT < VANILLA_ICE_CREAM")
+        }
     }
 
     @Throws(RemoteException::class)
@@ -54,7 +56,8 @@ class ConstellationService : BaseService("GmsConstellationSvc", GmsService.CONST
 //                Feature("one_time_verification", 1),
 //                Feature("carrier_auth", 1),
                 Feature("verify_phone_number", 2),
-//                Feature("get_iid_token", 1),
+                Feature("get_iid_token", 1),
+//                Feature("get_pnv_capabilities", 1),
                 Feature("ts43", 1),
 //                Feature("verify_phone_number_local_read", 1)
             )

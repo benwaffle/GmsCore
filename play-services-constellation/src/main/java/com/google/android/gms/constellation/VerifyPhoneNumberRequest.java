@@ -1,7 +1,6 @@
 package com.google.android.gms.constellation;
 
 import android.os.Bundle;
-import android.telephony.TelephonyManager;
 
 import org.microg.safeparcel.AutoSafeParcelable;
 
@@ -13,37 +12,42 @@ public class VerifyPhoneNumberRequest extends AutoSafeParcelable {
     @Field(2)
     public long b;
     @Field(3)
-    public IdTokenRequest c;
+    public IdTokenRequest idTokenRequest; // IdTokenRequest{certHash='CYChK+mTUowZEHvCGtgRR4xjzvw=', tokenNonce='4b20882c8ebc75555ce0b48c1f741f040f49a0fe2e428d2caf84f10aba2184bc'},
 
     /**
      * strings i've seen:
+     *
      * consented: true/false
+     * consent_type=RCS_DEFAULT_ON_LEGAL_FYI_IN_SETTINGS
      * is_pnv_consent: true
      * api_version: integer (1, 2)
      * policy_id: string
+     * one_time_verification=True
+     * required_consumer_consent=RCS
+     * session_id=UUID
      */
     @Field(4)
     public Bundle settings;
     @Field(5)
-    public List<ImsiRequest> e;
+    public List<ImsiRequest> imsis;
     @Field(6)
     public boolean f;
     @Field(7)
     public int g;
     @Field(8)
-    public List h;
+    public List phoneNumberSelections;
 
     @Override
     public String toString() {
         return "VerifyPhoneNumberRequest{" +
                 "upiPolicyId='" + upiPolicyId + '\'' +
                 ", b=" + b +
-                ", c=" + c +
+                ", idTokenRequest=" + idTokenRequest +
                 ", settings=" + bundleToString(settings) +
-                ", e=" + e +
+                ", imsis=" + imsis +
                 ", f=" + f +
                 ", g=" + g +
-                ", h=" + h +
+                ", phoneNumberSelections=" + phoneNumberSelections +
                 '}';
     }
 

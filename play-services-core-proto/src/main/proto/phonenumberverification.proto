@@ -47,7 +47,7 @@ message SyncRequest {
   repeated Verification verifications = 3;
 
   // Verification tokens used in the backup and restore flow for verifying a new device that was phone number verified in the past http://goto.google.com/c11n-br-acquisition
-  // repeated VerificationToken verification_tokens = <unknown field number>;
+  repeated VerificationToken verification_tokens = 5;
 }
 
 // SyncResponse is the response to sync
@@ -197,7 +197,7 @@ message Verification {
   PendingVerificationInfo pending_verification_info = 4;
 
   // Verification information when the user is unverified Populated by the server when state = NONE
-  bytes unverified_info = 9;
+  optional bytes unverified_info = 9;
 
   // Additional API params set in the request and response for each verification. We use free-form key-values than a proto, to make the client agnostic to the actual params.
   repeated Param api_params = 6;
@@ -271,7 +271,7 @@ enum PhoneNumberSource {
 
 message SIMSlot {
   // Index of the SIM slot. Note this is just the sub_id on pre-Q devices.
-  int32 index = 1;
+  optional int32 index = 1;
   // Subscription ID corresponding to the SIM slot.
   int32 sub_id = 2;
 }
@@ -355,7 +355,7 @@ message IMSIRequest {
   // IMSIs of the specific SIMs to be verified or IMSIs related to the Phone number hints provided
   string imsi = 1;
   // Phone number hints received from the calling app to enable sending MT
-  string phone_number_hint = 2;
+  optional string phone_number_hint = 2;
 }
 
 // Challenge response.
@@ -566,11 +566,11 @@ enum ChallengeType {
   // Challenge by carrier id (GTAF).
   CHALLENGE_TYPE_CARRIER_ID = 3;
   // Imsi lookup performed through GTAF
-  CHALLENGE_TYPE_IMSI_LOOKUP = 4;
+  CHALLENGE_TYPE_IMSI_LOOKUP = 5;
   // Challenge issued to do a RegisteredSMS Verification.
-  CHALLENGE_TYPE_REGISTERED_SMS = 5;
+  CHALLENGE_TYPE_REGISTERED_SMS = 7;
   // Challenge by FlashCall (go/c11n-design-flash-call-auth).
-  CHALLENGE_TYPE_FLASH_CALL = 6;
+  CHALLENGE_TYPE_FLASH_CALL = 8;
   // Challenge by TS.43 (go/c11n-ts43-design)
   CHALLENGE_TYPE_TS43 = 11;
 }
@@ -799,7 +799,7 @@ message DeviceId {
   // The Android ID of the primary user profile of the device.
   int64 device_android_id = 2;
   // Device serial number for the multiple user feature. Also known as Multiuser-serial. device_user_id is used to identify different user profiles on a single device. (Required when device_id is set)
-  int64 device_user_id = 3;
+  optional int64 device_user_id = 3;
   // Android ID of the user profile, if the user profile had a checkin.
   int64 user_android_id = 4;
 }
@@ -834,9 +834,9 @@ message ClientInfo {
   // The manufacturer of the device making this request
   string manufacturer = 16;
   // The type of user profile the client runs on (regular user or work profile).
-  UserProfileType user_profile_type = 17;
+  optional UserProfileType user_profile_type = 17;
   DeviceType device_type = 18;
-  bool is_standalone_device = 19;
+  optional bool is_standalone_device = 19;
   // The fingerprint of the device making this request
   // Obtained from https://developer.android.com/reference/android/os/Build#FINGERPRINT
   string device_fingerprint = 21;
@@ -851,10 +851,10 @@ message ClientInfo {
 
 // DeviceSignals in ClientInfo
 message DeviceSignals {
-  // DroidGuard result from the client. (Required)
-  string droidguard_result = 1;
   // DroidGuard token from the client.
-  string droidguard_token = 2;
+  optional string droidguard_token = 1;
+  // DroidGuard result from the client. (Required)
+  string droidguard_result = 2;
 }
 
 // CountryInfo of the SIM.
@@ -995,7 +995,7 @@ message TelephonyInfo {
   // Sim state of the device.
   SIMState sim_state = 1;
   // type of the phone.
-  PhoneType phone_type = 10;
+  // optional PhoneType phone_type = ?;
   // Group Identifier Level1 for a GSM phone. TelephonyManager.getGroupIdLevel1()
   string group_id_level1 = 2;
   // SIM Operator information. (Required)
@@ -1018,15 +1018,15 @@ message TelephonyInfo {
   // The index of the active sim for the associated verification. Client does not need to set this. CFE sets this before passing this message along to Verifier as part of the VerifyRequest Deprecated: this is for a very old bug: b/64725733.
   uint32 sim_index = 13;
   // True if the SIM is an eSIM. Client will set to false when API unavailable.
-  bool is_embedded_sim = 14;
+  optional bool is_embedded_sim = 14;
   // IMEI of the device. MEID if the phone type is CDMA.
   string imei = 15;
   // Service state of the sim
   ServiceState service_state = 16;
   // Verification method used for the request This field is used for clients signaling requested verification method to server
-  GtafVerificationMethod gtaf_verification_method = 17;
+  optional GtafVerificationMethod gtaf_verification_method = 17;
   // Carrier ID Challenge preference passed to GTAF through phone verifier.
-  CarrierIdChallengePreference carrier_id_challenge_preference = 18;
+  optional CarrierIdChallengePreference carrier_id_challenge_preference = 18;
   // Cellular network events.
   repeated CellularNetworkEvent cellular_network_events = 22;
   // Events for incoming/outgoing calls
@@ -1038,7 +1038,7 @@ message TelephonyInfo {
   // Android Telephony's Carrier ID: https://developer.android.com/reference/android/telephony/TelephonyManager#getSimCarrierId()
   int32 sim_carrier_id = 25;
   // Skip Device roaming checks b/406852685.
-  bool skip_device_roaming_checks = 23;
+  optional bool skip_device_roaming_checks = 23;
 }
 
 // Information about a mobile operator.
@@ -1050,9 +1050,9 @@ message MobileOperatorInfo {
   // Alphabetic name of the network operator. TelephonyManager.getNetworkOperatorName() for network operator and TelephonyManager.getSimOperatorName() for sim operator.
   string operator_name = 3;
   // Time in micros since when these values have been nil. (Deprecated after v18)
-  uint32 nil_since_micros = 4;
+  optional uint32 nil_since_micros = 4;
   // Time in micros since when these values have been nil.
-  uint64 nil_since_usec = 5;
+  optional uint64 nil_since_usec = 5;
 }
 
 message CarrierIdChallengePreference {
@@ -1109,19 +1109,19 @@ message ServiceStateEvent {
   // When the event was recorded.
   google.protobuf.Timestamp event_timestamp = 1;
   // Whether mobile data is enabled in device's settings.
-  bool mobile_data_enabled = 2;
+  optional bool mobile_data_enabled = 2;
   // Whether airplane mode is enabled in device's settings.
-  bool airplane_mode_enabled = 3;
+  optional bool airplane_mode_enabled = 3;
   // Voice registration state.
   int32 voice_registration_state = 4;
   // Data registration state.
   int32 data_registration_state = 5;
   // Voice network type.
-  int32 voice_network_type = 6;
+  optional int32 voice_network_type = 6;
   // Data network type.
-  int32 data_network_type = 7;
+  optional int32 data_network_type = 7;
   // If registration state is OUT_OF_SERVICE, the signal strength level detected at the time of the event.
-  int32 signal_strength = 8;
+  optional int32 signal_strength = 8;
 }
 
 enum SIMState {

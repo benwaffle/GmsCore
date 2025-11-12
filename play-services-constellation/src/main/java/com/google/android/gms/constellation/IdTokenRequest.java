@@ -6,16 +6,16 @@ import org.microg.safeparcel.AutoSafeParcelable;
 
 public class IdTokenRequest extends AutoSafeParcelable {
     @Field(1)
-    String a;
+    public String certificateHash; // android app cert sha1 e.g. CYChK+mTUowZEHvCGtgRR4xjzvw= (equivalent to 0980a12be993528c19107bc21ad811478c63cefc) for google messages
     @Field(2)
-    String b;
+    public String tokenNonce;
 
     @NonNull
     @Override
     public String toString() {
         return "IdTokenRequest{" +
-                "a='" + a + '\'' +
-                ", b='" + b + '\'' +
+                "certificateHash='" + certificateHash + '\'' +
+                ", tokenNonce='" + tokenNonce + '\'' +
                 '}';
     }
 

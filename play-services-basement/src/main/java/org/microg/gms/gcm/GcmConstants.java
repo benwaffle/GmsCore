@@ -63,7 +63,7 @@ public final class GcmConstants {
     public static final String EXTRA_SEND_FROM = "google.from";
     public static final String EXTRA_SENT_TIME = "google.sent_time";
     public static final String EXTRA_SIGNATURE = "sig";
-    public static final String EXTRA_SUBSCIPTION = "subscription";
+    public static final String EXTRA_SUBSCRIPTION = "subscription";
     public static final String EXTRA_SUBTYPE = "subtype";
     public static final String EXTRA_USE_GSF = "useGsf";
     public static final String EXTRA_TAG = "tag";

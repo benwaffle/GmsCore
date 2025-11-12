@@ -29,6 +29,8 @@ import com.android.libraries.entitlement.utils.Ts43Constants
 import com.google.android.gms.common.BuildConfig
 import com.google.android.gms.common.api.ApiMetadata
 import com.google.android.gms.common.api.Status
+import com.google.android.gms.constellation.GetIidTokenRequest
+import com.google.android.gms.constellation.GetIidTokenResponse
 import com.google.android.gms.constellation.PhoneNumberVerification
 import com.google.android.gms.constellation.VerifyPhoneNumberRequest
 import com.google.android.gms.constellation.VerifyPhoneNumberResponse
@@ -39,17 +41,22 @@ import com.google.android.gms.iid.InstanceID
 import com.google.android.gms.tasks.await
 import com.google.common.collect.ImmutableList
 import com.squareup.wire.GrpcClient
+import com.squareup.wire.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import okio.ByteString.Companion.toByteString
 import org.microg.gms.common.Constants
 import org.microg.gms.common.PackageUtils
 import org.microg.gms.droidguard.core.VersionUtil
 import org.microg.gms.gcm.GcmConstants
+import org.microg.gms.phonenumberverification.CarrierIdCapability
+import org.microg.gms.phonenumberverification.ChallengePreference
 import org.microg.gms.phonenumberverification.ClientInfo
 import org.microg.gms.phonenumberverification.ConnectivityAvailability
 import org.microg.gms.phonenumberverification.ConnectivityInfo
@@ -61,10 +68,12 @@ import org.microg.gms.phonenumberverification.DeviceSignals
 import org.microg.gms.phonenumberverification.DeviceType
 import org.microg.gms.phonenumberverification.IMSIRequest
 import org.microg.gms.phonenumberverification.IdTokenRequest
+import org.microg.gms.phonenumberverification.MTChallengePreference
 import org.microg.gms.phonenumberverification.MobileOperatorInfo
 import org.microg.gms.phonenumberverification.Param
 import org.microg.gms.phonenumberverification.PhoneDeviceVerificationClient
 import org.microg.gms.phonenumberverification.PhoneNumberSource
+import org.microg.gms.phonenumberverification.PremiumSmsPermission
 import org.microg.gms.phonenumberverification.RequestHeader
 import org.microg.gms.phonenumberverification.RequestTrigger
 import org.microg.gms.phonenumberverification.RoamingState
@@ -72,7 +81,9 @@ import org.microg.gms.phonenumberverification.SIMAssociation
 import org.microg.gms.phonenumberverification.SIMInfo
 import org.microg.gms.phonenumberverification.SIMSlot
 import org.microg.gms.phonenumberverification.SIMState
+import org.microg.gms.phonenumberverification.SMSCapability
 import org.microg.gms.phonenumberverification.ServiceState
+import org.microg.gms.phonenumberverification.ServiceStateEvent
 import org.microg.gms.phonenumberverification.StructuredAPIParams
 import org.microg.gms.phonenumberverification.SyncRequest
 import org.microg.gms.phonenumberverification.TelephonyInfo
@@ -85,6 +96,7 @@ import java.net.URL
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.util.Locale
 import java.util.UUID
@@ -95,6 +107,11 @@ private const val API_KEY = "AIzaSyAP-gfH3qvi6vgHZbSYwQ_XHqV_mXHhzIk" // TODO: d
 TODO:
 * what do we cache/store?
 * key management for ClientAuth - maybe not needed? it's not in the traces i captured
+* make SyncRequest not return invalid argument
+    * is it the droidguard field names?
+* implement getIidToken aidl api
+* is devicekey management / AppCert needed or does the local spatula header work?
+* allow user to input IMSI via copy/paste instead of requiring privileged permissions
  */
 
 @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
@@ -108,6 +125,7 @@ class ConstellationApiServiceImpl(
     private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val versionUtil = VersionUtil(context)
+    private val keypair = genEcP256Keypair("gms-constellation-temp")
 
     companion object {
         private const val TAG = "ConstellationApi"
@@ -119,7 +137,7 @@ class ConstellationApiServiceImpl(
     override fun verifyPhoneNumber(
         callbacks: IConstellationCallbacks,
         request: VerifyPhoneNumberRequest,
-        apiMetadata: ApiMetadata
+        apiMetadata: ApiMetadata,
     ) {
         Log.d(TAG, "verifyPhoneNumber called: request=$request, apiMetadata=$apiMetadata")
 
@@ -153,6 +171,36 @@ class ConstellationApiServiceImpl(
         }
     }
 
+    override fun getIidToken(
+        callbacks: IConstellationCallbacks,
+        request: GetIidTokenRequest,
+        apiMetadata: ApiMetadata,
+    ) {
+        Log.d(TAG, "getIidToken called: request=$request, apiMetadata=$apiMetadata")
+
+        val instanceId = InstanceID.getInstance(context)
+
+        val iidToken = instanceId.getToken(
+            "496232013492",// TODO: double check the authorizedEntity. Search "IidToken__asterism_project_number" in GmsCore
+            GcmConstants.INSTANCE_ID_SCOPE_GCM
+        )
+
+        val signTimestamp = Instant.now()
+        val signature = run {
+            val instance = Signature.getInstance("SHA256withECDSA")
+            instance.initSign(keypair.private)
+            instance.update("${iidToken}:${signTimestamp.epochSecond}:${signTimestamp.nano}".toByteArray())
+            instance.sign()
+        }
+
+        callbacks.onIidTokenGenerated(Status.SUCCESS, GetIidTokenResponse().apply {
+            this.iidToken = iidToken
+            this.fid = instanceId.id
+            this.currentTimeMs = signTimestamp.toEpochMilli()
+            this.clientSignature = signature
+        }, apiMetadata)
+    }
+
     @Throws(Exception::class)
     private suspend fun handleTs43Verification(
         callbacks: IConstellationCallbacks,
@@ -164,13 +212,13 @@ class ConstellationApiServiceImpl(
         try {
             // Step 1: Send SyncRequest
             Log.d(TAG, "Sending SyncRequest via gRPC")
-            val syncRequest = createSyncRequest(sessionId)
             val phoneVerificationClient = createGrpcClient()
+            val syncRequest = createSyncRequest(sessionId, request)
 
+            Log.d(TAG, "SyncRequest sent: ${syncRequest.toString().chunked(512).joinToString("\n")}")
             val syncResponse = withContext(Dispatchers.IO) {
                 phoneVerificationClient.Sync().execute(syncRequest)
             }
-            Log.d(TAG, "SyncRequest sent: $syncRequest")
             Log.d(TAG, "SyncResponse received: $syncResponse")
 
             if (syncResponse.responses[0].verification?.state != VerificationState.VERIFICATION_STATE_PENDING) {
@@ -216,8 +264,12 @@ class ConstellationApiServiceImpl(
     }
 
     @SuppressLint("HardwareIds", "MissingPermission")
-    private suspend fun createSyncRequest(sessionId: String): SyncRequest {
+    private suspend fun createSyncRequest(ourSessionId: String, request: VerifyPhoneNumberRequest): SyncRequest {
         val subs = subscriptionManager.activeSubscriptionInfoList
+
+        val settings = request.settings.keySet()
+            .mapNotNull { k -> request.settings.getString(k)?.let { v -> k to v } }
+            .toMap()
 
         return SyncRequest.build {
             verifications(
@@ -230,47 +282,43 @@ class ConstellationApiServiceImpl(
                             sim = createSimAssociation(sub, tm)
                         }
                         telephony_info = createTelephonyInfo(sub, tm)
-                        api_params = mapOf(
-                            "consent_type" to "RCS_DEFAULT_ON_LEGAL_FYI_IN_SETTINGS",
-                            "one_time_verification" to "True",
-                            "calling_api" to "verifyPhoneNumber",
-                            "required_consumer_consent" to "RCS",
-                            "sessionId" to sessionId, // TODO: this is a different session ID from the req header
-                        ).map { (key, value) ->
+                        api_params = settings.map { (key, value) ->
                             Param.build {
                                 name = key
                                 value_ = value
                             }
                         }
-//                        challenge_preference = ChallengePreference.build {
-//                            mt_preference = MTChallengePreference.build {
-//                                localized_message_template("asdf") // can we ignore if not doing MT SMS challenge?
-//                            }
-//                        }
-                        structured_api_params = StructuredAPIParams.build {
-                            policy_id = UPI_CARRIER_TOS_TS43
-                            id_token_request = IdTokenRequest.build {
-                                val caller = PackageUtils.getCallingPackage(context)
-                                val certHash = PackageUtils.firstSignatureDigestBytes(context, caller)
-                                val b64 = Base64.encodeToString(certHash, Base64.DEFAULT)
-                                certificate_hash = b64
+                        challenge_preference = ChallengePreference.build {
+                            mt_preference = MTChallengePreference.build {
+                                val bytes = ByteArray(8)
+                                SecureRandom().nextBytes(bytes)
 
-                                val nonce = ByteArray(32)
-                                SecureRandom().nextBytes(nonce)
-                                val hex = nonce.joinToString("") { "%02x".format(it) }
-                                token_nonce = hex
+                                localized_message_template = Base64.encodeToString(bytes, Base64.DEFAULT)
                             }
-                            PackageUtils.getCallingPackage(context)?.let { packageName ->
-                                calling_package = packageName
+                        }
+                        structured_api_params = StructuredAPIParams.build {
+                            policy_id = request.upiPolicyId
+                            id_token_request = IdTokenRequest.build {
+                                certificate_hash = request.idTokenRequest.certificateHash
+                                token_nonce = request.idTokenRequest.tokenNonce
                             }
-                            imsi_requests = listOf(IMSIRequest.build {
-                                imsi = tm.subscriberId
-                            })
+                            PackageUtils.getCallingPackage(context)?.let { packageName -> // TODO: this is showing gms, not apps.messaging - get from verifyPhoneNumber params
+                                Log.w(TAG, "Overriding calling package from $packageName to bugle")
+//                                calling_package = packageName
+                                calling_package = "com.google.android.apps.messaging"
+                            }
+                            imsi_requests = request.imsis.map {
+                                IMSIRequest.build {
+                                    imsi = it.imsi
+                                    phone_number_hint = it.msisdn
+                                }
+                            }
                         }
                     }
                 } ?: listOf()
             )
-            header_(createRequestHeader(sessionId))
+            header_(createRequestHeader(ourSessionId))
+            verification_tokens = listOf()
         }
     }
 
@@ -281,7 +329,7 @@ class ConstellationApiServiceImpl(
         return SIMAssociation.build {
             sim_info = SIMInfo.build {
                 imsi = listOf(tm.subscriberId)
-                sim_readable_number = subscriptionManager.getPhoneNumber(subId)
+                sim_readable_number = "+" + subscriptionManager.getPhoneNumber(subId) // TODO: this has no +, captures have +
                 telephony_phone_number = listOf(
                     SubscriptionManager.PHONE_NUMBER_SOURCE_UICC,
                     SubscriptionManager.PHONE_NUMBER_SOURCE_IMS,
@@ -331,12 +379,13 @@ class ConstellationApiServiceImpl(
                 true -> RoamingState.ROAMING_STATE_ROAMING
                 false -> RoamingState.ROAMING_STATE_NOT_ROAMING
             }
+            sms_capability = SMSCapability.SMS_CAPABILITY_USER_RESTRICTED // TODO: fix
 //            sms_capability = when (tm.isDeviceSmsCapable) {
 //                true -> SMSCapability.SMS_CAPABILITY_CAPABLE
 //                false -> SMSCapability.SMS_CAPABILITY_INCAPABLE
 //            }
-//            carrier_id_capability
-//            premium_sms_permission
+            carrier_id_capability = CarrierIdCapability.CARRIER_ID_INCAPABLE
+            premium_sms_permission = PremiumSmsPermission.PREMIUM_SMS_PERMISSION_GRANTED
             subscription_count = subscriptionManager.activeSubscriptionInfoCount
             subscription_count_max = subscriptionManager.activeSubscriptionInfoCountMax
             sim_index = sub.simSlotIndex
@@ -348,7 +397,13 @@ class ConstellationApiServiceImpl(
                 android.telephony.ServiceState.STATE_POWER_OFF -> ServiceState.SERVICE_STATE_POWER_OFF
                 else -> ServiceState.SERVICE_STATE_UNKNOWN
             }
-//            service_state_events
+            service_state_events = listOf(
+                ServiceStateEvent.build {
+                    voice_registration_state = 1
+                    data_registration_state = 1
+                    event_timestamp = Instant.now().minusSeconds(86400)
+                }
+            )
             sim_carrier_id = tm.simCarrierId
         }
     }
@@ -427,16 +482,15 @@ class ConstellationApiServiceImpl(
 //
 //        return builder.build()
 //    }
-//
+
     @SuppressLint("HardwareIds", "MissingPermission")
     private suspend fun createRequestHeader(sessionId: String): RequestHeader {
         val instanceId = InstanceID.getInstance(context)
+
         val iidToken = instanceId.getToken(
             "496232013492",// TODO: double check the authorizedEntity. Search "IidToken__asterism_project_number" in GmsCore
             GcmConstants.INSTANCE_ID_SCOPE_GCM
         )
-        // TODO cache/store?
-        val keypair = genEcP256Keypair("gms-constellation-temp")
 
         val hasher = MessageDigest.getInstance("SHA-256")
         hasher.update(iidToken.toByteArray())
@@ -449,38 +503,51 @@ class ConstellationApiServiceImpl(
             )
         ).await()
 
+        val deviceId = DeviceId.build {
+            iid_token = iidToken
+
+            val id = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ANDROID_ID,
+            ).toLong(16)
+            device_android_id = id // TODO: get the *primary* user id
+//                    device_user_id = ???
+            user_android_id = id
+        }
+
+        // ECDSA signature of a SHA256 hash of "device_id.iid_token:sign_timestamp.seconds:sign_timestamp.nanos"
+        val signTimestamp = Instant.now()
+        val signature = run {
+            val instance = Signature.getInstance("SHA256withECDSA")
+            instance.initSign(keypair.private)
+            instance.update("${iidToken}:${signTimestamp.epochSecond}:${signTimestamp.nano}".toByteArray())
+            instance.sign()
+        }
+
         return RequestHeader.build {
             client_info = ClientInfo.build {
-                device_id = DeviceId.build {
-                    iid_token = iidToken
-
-                    val id = Settings.Secure.getString(
-                        context.contentResolver,
-                        Settings.Secure.ANDROID_ID,
-                    ).toLong()
-                    device_android_id = id // TODO: get the *primary* user id
-                    user_android_id = id
-                }
+                device_id = deviceId
                 client_public_key = keypair.public.encoded.toByteString()
                 locale = Locale.getDefault().toString()
                 gmscore_version_number = BuildConfig.VERSION_CODE / 1000
                 gmscore_version = versionUtil.versionString
                 android_sdk_version = Build.VERSION.SDK_INT
                 device_signals = DeviceSignals.build {
-//                    droidguard_token = droidguardToken
-                    droidguard_result = droidguardResult
+                    // TODO: which one is it?
+                    droidguard_token = droidguardResult
+//                    droidguard_result = droidguardResult
                 }
                 has_read_privileged_phone_state_permission = true
                 country_info = CountryInfo.build {
                     sim_countries = listOf(telephonyManager.simCountryIso)
                     network_countries = listOf(telephonyManager.networkCountryIso)
                 }
-                connectivity_infos = connectivityManager.allNetworks
+                connectivity_infos = connectivityManager.allNetworks // TODO: why do we see 3?
                     .mapNotNull { net ->
                         val cap = connectivityManager.getNetworkCapabilities(net)
-                        if (cap == null) return@mapNotNull null
+                            ?: return@mapNotNull null
                         val info = connectivityManager.getNetworkInfo(net)
-                        if (info == null) return@mapNotNull null
+                            ?: return@mapNotNull null
                         ConnectivityInfo.build {
                             type =
                                 if (cap.hasTransport(NetworkCapabilities.TRANSPORT_WIFI))
@@ -508,6 +575,13 @@ class ConstellationApiServiceImpl(
                 device_type = DeviceType.DEVICE_TYPE_PHONE // is this always true?
                 device_fingerprint = Build.FINGERPRINT
             }
+            /*
+            client_auth = ClientAuth.build {
+                device_id = deviceId
+                client_sign = signature.toByteString()
+                sign_timestamp = signTimestamp
+            }
+             */
             session_id = sessionId
             trigger = RequestTrigger.build {
                 type = TriggerType.TRIGGER_TYPE_TRIGGER_API_CALL
@@ -525,6 +599,19 @@ class ConstellationApiServiceImpl(
                  ?: throw IllegalStateException("Failed to generate spatula header for $callingPackage")
          }
 
+         // Create logging interceptor for debugging
+         val loggingInterceptor = HttpLoggingInterceptor { message ->
+             Log.d(TAG, "OkHttp: $message")
+         }.apply {
+             level = HttpLoggingInterceptor.Level.BODY
+         }
+
+        val trailerLoggingInterceptor = Interceptor { chain ->
+            val response = chain.proceed(chain.request())
+            println("Trailers: ${response.trailers()}")
+            response
+        }
+
          val client = OkHttpClient.Builder()
              .addInterceptor { chain ->
                  val originalRequest = chain.request()
@@ -536,6 +623,8 @@ class ConstellationApiServiceImpl(
 
                  chain.proceed(builder.build())
              }
+             .addInterceptor(loggingInterceptor)
+             .addInterceptor(trailerLoggingInterceptor)
              .build()
 
          val grpcClient = GrpcClient.Builder()
